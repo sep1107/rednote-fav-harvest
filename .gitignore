@@ -1,0 +1,19 @@
+# 采集产物：含个人收藏数据与 xsec_token，绝不入库
+favorites.jsonl
+favorites*.jsonl
+ids.tsv
+state.json
+pages.log
+*.log
+run*/
+
+# 浏览器 profile（含登录态）
+xhs-profile/
+*.pem
+
+# 临时与探针
+probe*.tsv
+probe*.html
+__pycache__/
+*.pyc
+.DS_Store

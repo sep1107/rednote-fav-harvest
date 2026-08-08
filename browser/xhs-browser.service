@@ -1,0 +1,15 @@
+[Unit]
+Description=Headless Chromium for Rednote (CDP on 127.0.0.1:9222)
+
+[Service]
+Type=simple
+ExecStart=%h/xhs-browser.sh
+Restart=on-failure
+RestartSec=5
+# 与 whisper 争 CPU 时让路
+Nice=10
+CPUQuota=80%
+MemoryMax=8G
+
+[Install]
+WantedBy=default.target
