@@ -90,7 +90,11 @@ async def main(a):
         while time.time() < deadline and has_more:
             if a.target and len(rows) - base >= a.target:
                 break
-            # 到底只认 has_more=False。重复页在续跑时是必然现象，永远不作为停机依据
+            # 增量模式从列表顶部开始，撞到已知内容即可停——这与全量续跑相反：
+            # 全量续跑开头必然是上百页重复，据此停会永远跑不到新数据。
+            if a.incremental and dupe_pages >= a.stop_after:
+                print(f"连续 {dupe_pages} 页均为已知条目，增量到头", flush=True)
+                break
             if a.max_pages and pages >= a.max_pages:
                 print(f"达到页数上限 {a.max_pages}，停止", flush=True)
                 break
@@ -172,5 +176,7 @@ ap.add_argument("--max-minutes", type=int, default=60)
 ap.add_argument("--idle-stop", type=int, default=0)   # 保留参数但不再用于停机
 ap.add_argument("--max-pages", type=int, default=1200)
 ap.add_argument("--fast-gap", type=float, default=0.7)
+ap.add_argument("--incremental", action="store_true", help="从顶部扫到遇见已知条目为止")
+ap.add_argument("--stop-after", type=int, default=3, help="增量模式下连续多少页无新条目即停")
 ap.add_argument("--gap", type=float, default=1.6)
 asyncio.run(main(ap.parse_args()))

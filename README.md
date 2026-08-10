@@ -101,6 +101,35 @@ python3 harvest.py --max-minutes 30
 https://www.xiaohongshu.com/explore/<note_id>?xsec_token=<token>&xsec_source=pc_feed
 ```
 
+## 增量采集
+
+全量跑完之后，日常只需要从列表顶部扫到遇见已知条目为止：
+
+```bash
+python3 harvest.py --incremental --stop-after 3
+python3 rebuild_queue.py      # 重建待处理队列
+```
+
+实测约 10 秒、扫 4 页即停。
+
+**增量与全量的停机判据相反，这一点值得注意。** 全量续跑时开头必然是上百页已知条目，
+若据此停机就永远够不到新数据 —— 全量只认接口返回的 `has_more=False`。
+而增量从列表顶部开始，撞到已知内容正是该停的信号。所以是显式的 `--incremental` 开关，
+不共用一套逻辑。
+
+`rebuild_queue.py` 由「采集库 − 已处理 − 跳过名单」推导出待处理队列，按收藏时间倒序，
+新条目天然排在队首。队列是派生产物，不手工维护 —— 两份手工维护的「还剩什么没做」一定会漂移。
+
+它读取脚本同目录下的：
+
+| 文件 | 作用 |
+|---|---|
+| `favorites.jsonl` | 采集库（本工具产出）|
+| `out/clipped.jsonl` 或 `clipped_ids.txt` | 已处理的 `note_id` |
+| `skip.jsonl` | 人工判定不再处理的 `note_id` |
+
+后两者的格式由下游流程决定，本工具只读 `note_id` 字段；文件不存在时按空集处理。
+
 ## 一个必须说清的边界：枚举拿不全
 
 页面上显示「笔记・6773」，接口枚举到 4294 条就 `has_more=False` 了，差约 2479 条。
