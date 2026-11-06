@@ -21,8 +21,8 @@ HTTP 406  {"code":-1,"success":false}
 所以本工具不去复现签名算法（那玩意儿一改就废），而是：
 
 1. 在服务器上跑一个登录态的无头 Chromium，开着 CDP 调试端口；
-2. 通过 CDP 订阅 `Network.responseReceived` / `Network.loadingFinished`；
-3. 滚动页面让站点前端自己去翻页，每翻一页就把响应体读下来；
+2. 按 URL 主机名选择小红书标签页（不会使用其他网站的标签页），通过 CDP 订阅 `Network.responseReceived` / `Network.loadingFinished`；
+3. 激活小红书标签页，读取页面内嵌的首屏收藏，再滚动实际可滚动容器，读取后续分页响应；
 4. 按 `note_id` 去重入库。
 
 签名、鉴权、分页游标全部由站点前端负责，工具只负责滚动和记账。小红书改签名算法不影响本工具。
@@ -67,7 +67,7 @@ ssh -N -L 9222:127.0.0.1:9222 <your-server>
 然后在本地浏览器打开：
 
 ```bash
-open "http://localhost:9222/devtools/inspector.html?ws=localhost:9222/devtools/page/$(curl -s http://localhost:9222/json/list | python3 -c 'import sys,json;print([t["id"] for t in json.load(sys.stdin) if t["type"]=="page"][0])')"
+open "http://localhost:9222/devtools/inspector.html?ws=localhost:9222/devtools/page/$(curl -s http://localhost:9222/json/list | python3 -c 'import sys,json;from urllib.parse import urlsplit;print([t["id"] for t in json.load(sys.stdin) if t["type"]=="page" and urlsplit(t.get("url","")).hostname in ("xiaohongshu.com","www.xiaohongshu.com")][0])')"
 ```
 
 DevTools 要 10–15 秒才附着，标题变成 `DevTools - www.xiaohongshu.com/...` 才算连上，在那之前是白屏，正常。主面板就是服务器上那个浏览器的实时画面，点「登录」，二维码显示在**你自己的屏幕上**，手机扫码并在手机上确认。
@@ -165,6 +165,15 @@ python3 rebuild_queue.py      # 重建待处理队列
 7. **别靠文本匹配去点 tab。** 「笔记」既是主 tab 也是子 tab（`笔记・6773`），松散匹配会点飞到别的页面。要么用带「・」的判据区分，要么干脆别点。
 
 8. **采集期屏蔽图片请求**（封面 URL 接口里已经有了，不必真下载）——虚拟滚动几千页时内存和带宽都省下来。
+
+## 回归检查
+
+```bash
+python3 -m unittest -v test_harvest
+node test_browser.js
+```
+
+分别覆盖标签页域名选择，以及内嵌首屏数据和两种滚动布局；Node.js 仅用于开发测试，采集运行不需要。
 
 ## 授权与用途
 

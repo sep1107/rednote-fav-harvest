@@ -7,6 +7,7 @@ Store: favorites.jsonl (one row per note_id, newest token wins) + state.json.
 """
 import argparse, asyncio, json, os, sys, time, urllib.request
 import websockets
+from urllib.parse import urlsplit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STORE = os.path.join(HERE, "favorites.jsonl")
@@ -14,7 +15,17 @@ STATE = os.path.join(HERE, "state.json")
 CDP = "http://127.0.0.1:9222"
 BLOCKED = ["*sns-webpic*", "*sns-avatar*", "*sns-img*", "*.jpg", "*.jpeg", "*.png", "*.webp", "*.gif"]
 # 实测最有效：先上抬再下探，比单纯跳到底部触发率高
-SCROLL = "(function(){window.scrollBy(0,-300);setTimeout(function(){window.scrollBy(0,900)},200)})()"
+SCROLL = "(function(){var e=document.querySelector('.user-page');if(!e||e.scrollHeight<=e.clientHeight||!['auto','scroll'].includes(getComputedStyle(e).overflowY))e=document.scrollingElement;e.scrollBy(0,-300);setTimeout(function(){e.scrollBy(0,900)},200)})()"
+
+# Newer pages embed the first favorites page instead of issuing collect/page.
+INITIAL_NOTES = """JSON.stringify((()=>{
+const u=window.__INITIAL_STATE__?.user;
+const raw=u?.notes;const notes=raw?._value||raw?.value||raw;
+return (Array.isArray(notes?.[1])?notes[1]:[]).map(r=>{
+const n=r.noteCard||{};return {note_id:r.id||n.noteId,type:n.type,
+display_title:n.displayTitle,xsec_token:r.xsecToken||n.xsecToken,
+cover:{url_default:n.cover?.urlDefault||n.cover?.url_default||''}};
+});})())"""
 
 
 def load_store():
@@ -41,9 +52,11 @@ def save_store(rows):
 
 def page_ws():
     ts = json.load(urllib.request.urlopen(CDP + "/json/list", timeout=10))
-    p = [t for t in ts if t["type"] == "page"]
+    p = [t for t in ts if t["type"] == "page"
+         and urlsplit(t.get("url", "")).hostname in
+         ("xiaohongshu.com", "www.xiaohongshu.com")]
     if not p:
-        sys.exit("没有 page target，浏览器没起来")
+        sys.exit("没有小红书 page target，请先在浏览器打开小红书")
     return p[0]["webSocketDebuggerUrl"]
 
 
@@ -66,7 +79,7 @@ async def main(a):
             await ws.send(json.dumps({"id": n, "method": m, "params": p or {}}))
             return n
 
-        for m in ("Network.enable", "Page.enable", "Runtime.enable"):
+        for m in ("Network.enable", "Page.enable", "Runtime.enable", "Page.bringToFront"):
             await send(m)
         await send("Network.setBlockedURLs", {"urls": BLOCKED})
 
@@ -86,6 +99,7 @@ async def main(a):
         await send("Page.navigate", {"url": f"https://www.xiaohongshu.com{own}?tab=fav&subTab=note"})
 
         deadline = time.time() + a.max_minutes * 60
+        initial_read = False
         next_scroll = time.time() + 6
         while time.time() < deadline and has_more:
             if a.target and len(rows) - base >= a.target:
@@ -99,6 +113,9 @@ async def main(a):
                 print(f"达到页数上限 {a.max_pages}，停止", flush=True)
                 break
             if time.time() >= next_scroll:
+                if not initial_read:
+                    pend[await send("Runtime.evaluate", {
+                        "expression": INITIAL_NOTES, "returnByValue": True})] = "initial"
                 await send("Runtime.evaluate", {"expression": SCROLL})
                 next_scroll = time.time() + (a.gap if got_new else a.fast_gap)
             try:
@@ -112,9 +129,17 @@ async def main(a):
                 rid = msg["params"]["requestId"]
                 pend.pop(rid)
                 pend[await send("Network.getResponseBody", {"requestId": rid})] = "body"
-            elif pend.get(msg.get("id")) == "body":
-                pend.pop(msg["id"])
-                body = (msg.get("result") or {}).get("body")
+            elif pend.get(msg.get("id")) in ("body", "initial"):
+                kind = pend.pop(msg["id"])
+                if kind == "initial":
+                    value = (((msg.get("result") or {}).get("result") or {}).get("value"))
+                    items = json.loads(value or "[]")
+                    if not items:
+                        continue
+                    initial_read = True
+                    body = json.dumps({"data": {"notes": items, "has_more": True}})
+                else:
+                    body = (msg.get("result") or {}).get("body")
                 if not body:
                     continue
                 try:
@@ -170,13 +195,14 @@ async def main(a):
           f"has_more={has_more}，类型 {tp}", flush=True)
 
 
-ap = argparse.ArgumentParser()
-ap.add_argument("--target", type=int, default=0)
-ap.add_argument("--max-minutes", type=int, default=60)
-ap.add_argument("--idle-stop", type=int, default=0)   # 保留参数但不再用于停机
-ap.add_argument("--max-pages", type=int, default=1200)
-ap.add_argument("--fast-gap", type=float, default=0.7)
-ap.add_argument("--incremental", action="store_true", help="从顶部扫到遇见已知条目为止")
-ap.add_argument("--stop-after", type=int, default=3, help="增量模式下连续多少页无新条目即停")
-ap.add_argument("--gap", type=float, default=1.6)
-asyncio.run(main(ap.parse_args()))
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--target", type=int, default=0)
+    ap.add_argument("--max-minutes", type=int, default=60)
+    ap.add_argument("--idle-stop", type=int, default=0)   # 保留参数但不再用于停机
+    ap.add_argument("--max-pages", type=int, default=1200)
+    ap.add_argument("--fast-gap", type=float, default=0.7)
+    ap.add_argument("--incremental", action="store_true", help="从顶部扫到遇见已知条目为止")
+    ap.add_argument("--stop-after", type=int, default=3, help="增量模式下连续多少页无新条目即停")
+    ap.add_argument("--gap", type=float, default=1.6)
+    asyncio.run(main(ap.parse_args()))
